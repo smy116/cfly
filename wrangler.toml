@@ -3,7 +3,9 @@ main = "src/index.js"
 compatibility_date = "2025-01-01"
 minify = true
 
-# DOMAIN 和 INTRANET_URL 请在 CF Dashboard → Worker Settings → Variables 中设置
+# 部署后请用以下命令设置变量（不会随代码更新丢失）：
+#   wrangler secret put DOMAIN
+#   wrangler secret put INTRANET_URL
 
 [[kv_namespaces]]
 binding = "LINKS"

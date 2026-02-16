@@ -6,36 +6,36 @@ const app = new Hono()
 
 /** 从请求中提取 slug（子域名模式或路径模式） */
 function getSlug(c) {
-    const domain = c.env.DOMAIN
-    const url = new URL(c.req.url)
-    const hostname = url.hostname
+  const domain = c.env.DOMAIN
+  const url = new URL(c.req.url)
+  const hostname = url.hostname
 
-    // 子域名模式: abc.domain.com → slug = "abc"
-    if (hostname !== domain && hostname.endsWith('.' + domain)) {
-        return hostname.slice(0, -(domain.length + 1))
-    }
+  // 子域名模式: abc.domain.com → slug = "abc"
+  if (hostname !== domain && hostname.endsWith('.' + domain)) {
+    return hostname.slice(0, -(domain.length + 1))
+  }
 
-    // 路径模式: domain.com/abc → slug = "abc"
-    const path = url.pathname.slice(1) // 去掉开头的 /
-    return path
+  // 路径模式: domain.com/abc → slug = "abc"
+  const path = url.pathname.slice(1) // 去掉开头的 /
+  return path
 }
 
 /** 解析 KV value，返回 { internal, external } 或 { url } */
 function parseValue(raw) {
-    if (!raw) return null
+  if (!raw) return null
 
-    // 尝试 JSON 解析
-    if (raw.startsWith('{')) {
-        try {
-            const obj = JSON.parse(raw)
-            if (obj.i && obj.e) {
-                return { internal: obj.i, external: obj.e }
-            }
-        } catch { }
-    }
+  // 尝试 JSON 解析
+  if (raw.startsWith('{')) {
+    try {
+      const obj = JSON.parse(raw)
+      if (obj.i && obj.e) {
+        return { internal: obj.i, external: obj.e }
+      }
+    } catch { }
+  }
 
-    // 纯 URL
-    return { url: raw }
+  // 纯 URL
+  return { url: raw }
 }
 
 // ─── 页面生成 ───
@@ -51,7 +51,7 @@ body{min-height:100vh;display:flex;align-items:center;justify-content:center;
 
 /** 404 页面 */
 function generate404Page() {
-    return `<!DOCTYPE html>
+  return `<!DOCTYPE html>
 <html lang="zh">
 <head>
 <meta charset="utf-8">
@@ -76,7 +76,7 @@ ${BASE_STYLE}
 
 /** <img> 标签内网探测页面 */
 function generateDetectPage(internalUrl, externalUrl, intranetUrl) {
-    return `<!DOCTYPE html>
+  return `<!DOCTYPE html>
 <html lang="zh">
 <head>
 <meta charset="utf-8">
@@ -87,27 +87,33 @@ ${BASE_STYLE}
 .spinner{width:28px;height:28px;border:2.5px solid #e5e5ea;border-top-color:#007aff;
   border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 1.2rem}
 @keyframes spin{to{transform:rotate(360deg)}}
-.msg{font-size:.9rem;color:#86868b}
+.msg{font-size:.9rem;color:#86868b;transition:all .3s}
 .links{margin-top:1.5rem;display:flex;gap:.6rem;justify-content:center}
 .links a{padding:.4rem 1rem;border-radius:6px;font-size:.8rem;
   text-decoration:none;color:#007aff;border:1px solid #e5e5ea;
-  transition:background .2s}
+  transition:all .2s}
 .links a:hover{background:#f0f0f5}
+.links.highlight a{padding:.55rem 1.3rem;font-size:.9rem;font-weight:500}
+.links.highlight a.int{background:#007aff;color:#fff;border-color:#007aff}
+.links.highlight a.int:hover{background:#0060cc}
+.hint{margin-top:.8rem;font-size:.75rem;color:#aeaeb2;display:none}
 </style>
 </head>
 <body>
 <div class="card">
-  <div class="spinner"></div>
-  <div class="msg">正在检测网络环境</div>
-  <div class="links">
-    <a href="${internalUrl}">内网访问</a>
-    <a href="${externalUrl}">外网访问</a>
+  <div class="spinner" id="sp"></div>
+  <div class="msg" id="msg">正在检测网络环境</div>
+  <div class="links" id="links">
+    <a class="int" href="${internalUrl}">内网访问</a>
+    <a class="ext" href="${externalUrl}">外网访问</a>
   </div>
+  <div class="hint" id="hint">如浏览器弹出权限提示，请点击"允许"后等待自动跳转</div>
 </div>
 <script>
 (function(){
   var done = false;
-  var TIMEOUT = 2000;
+  var TIMEOUT = 3000;
+  var MIN_RESPONSE = 200; // onerror 在此时间内触发视为浏览器拦截，非真实网络响应
   var internalUrl = ${JSON.stringify(internalUrl)};
   var externalUrl = ${JSON.stringify(externalUrl)};
 
@@ -117,17 +123,29 @@ ${BASE_STYLE}
     location.replace(url);
   }
 
-  // <img> 探测：尝试加载内网资源
+  function showManual() {
+    if (done) return;
+    document.getElementById('sp').style.display = 'none';
+    document.getElementById('msg').textContent = '请选择网络环境';
+    document.getElementById('links').classList.add('highlight');
+    document.getElementById('hint').style.display = 'block';
+  }
+
+  var start = Date.now();
   var img = new Image();
   img.onload = function() { go(internalUrl); };
   img.onerror = function() {
-    // onerror 快速触发说明 TCP 可达（证书错误/非图片等），判定为内网
-    go(internalUrl);
+    var elapsed = Date.now() - start;
+    if (elapsed >= MIN_RESPONSE) {
+      // onerror 有明显延迟 → TCP 可达但返回非图片/证书错误 → 内网
+      go(internalUrl);
+    }
+    // 瞬间触发 → 浏览器策略拦截，不跳转，等超时后显示手动选择
   };
   img.src = ${JSON.stringify(intranetUrl + '/favicon.ico')} + '?_t=' + Date.now();
 
-  // 超时兜底：无法连接内网 → 外网
-  setTimeout(function() { go(externalUrl); }, TIMEOUT);
+  // 超时后显示手动选择（探测仍继续，允许弹窗后自动跳转）
+  setTimeout(showManual, TIMEOUT);
 })();
 </script>
 </body>
@@ -137,35 +155,35 @@ ${BASE_STYLE}
 // ─── 路由 ───
 
 app.get('*', async (c) => {
-    const slug = getSlug(c)
+  const slug = getSlug(c)
 
-    // 忽略空路径和 favicon
-    if (!slug || slug === 'favicon.ico') {
-        return c.html(generate404Page(), 404)
-    }
+  // 忽略空路径和 favicon
+  if (!slug || slug === 'favicon.ico') {
+    return c.html(generate404Page(), 404)
+  }
 
-    // 查询 KV
-    const raw = await c.env.LINKS.get(slug)
-    if (!raw) {
-        return c.html(generate404Page(), 404)
-    }
+  // 查询 KV
+  const raw = await c.env.LINKS.get(slug)
+  if (!raw) {
+    return c.html(generate404Page(), 404)
+  }
 
-    const parsed = parseValue(raw)
+  const parsed = parseValue(raw)
 
-    // 纯 URL → 302 跳转
-    if (parsed.url) {
-        return c.redirect(parsed.url, 302)
-    }
+  // 纯 URL → 302 跳转
+  if (parsed.url) {
+    return c.redirect(parsed.url, 302)
+  }
 
-    // JSON（内外网） → 检查是否配置了 INTRANET_URL
-    const intranetUrl = c.env.INTRANET_URL
-    if (!intranetUrl) {
-        // 没有配置内网探测地址，直接跳外网
-        return c.redirect(parsed.external, 302)
-    }
+  // JSON（内外网） → 检查是否配置了 INTRANET_URL
+  const intranetUrl = c.env.INTRANET_URL
+  if (!intranetUrl) {
+    // 没有配置内网探测地址，直接跳外网
+    return c.redirect(parsed.external, 302)
+  }
 
-    // 返回探测页面
-    return c.html(generateDetectPage(parsed.internal, parsed.external, intranetUrl))
+  // 返回探测页面
+  return c.html(generateDetectPage(parsed.internal, parsed.external, intranetUrl))
 })
 
 export default app

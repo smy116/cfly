@@ -140,7 +140,7 @@ button:hover{background:#0056d6}
   <div class="icon">🔒</div>
   <div class="msg">此链接需要密码访问</div>
   ${error ? '<div class="err">密码错误，请重试</div>' : ''}
-  <form method="GET">
+  <form method="POST">
     <input type="password" name="p" placeholder="输入密码" autofocus required>
     <button type="submit">确认</button>
   </form>
@@ -208,59 +208,43 @@ ${BASE_STYLE}
 </html>`
 }
 
-// ─── 路由 ───
+// ─── 中间件 ───
 
-app.get('*', async (c) => {
+/** 安全响应头 */
+app.use('*', async (c, next) => {
+  await next()
+  c.header('X-Content-Type-Options', 'nosniff')
+  c.header('X-Frame-Options', 'DENY')
+  c.header('Referrer-Policy', 'no-referrer')
+})
+
+// ─── 公共逻辑 ───
+
+/** 查询并校验 slug 对应的链接，返回 { slug, parsed } 或直接返回错误 Response */
+async function resolveSlug(c) {
   const slug = getSlug(c)
 
-  // favicon.ico → 204 No Content
-  if (slug === 'favicon.ico') {
-    return new Response(null, { status: 204 })
-  }
+  if (slug === 'favicon.ico') return { response: new Response(null, { status: 204 }) }
+  if (!slug) return { response: c.html(PAGE_404, 404) }
+  if (!isValidSlug(slug)) return { response: c.html(PAGE_404, 404) }
 
-  // 空路径 → 404
-  if (!slug) {
-    return c.html(PAGE_404, 404)
-  }
-
-  // slug 格式校验
-  if (!isValidSlug(slug)) {
-    return c.html(PAGE_404, 404)
-  }
-
-  // 查询 KV（带缓存，减少读取次数）
   const raw = await c.env.LINKS.get(slug, { cacheTtl: 3600 })
-  if (!raw) {
-    return c.html(PAGE_404, 404)
-  }
+  if (!raw) return { response: c.html(PAGE_404, 404) }
 
   const parsed = parseValue(raw)
-  if (!parsed) {
-    return c.html(PAGE_404, 404)
-  }
+  if (!parsed) return { response: c.html(PAGE_404, 404) }
 
-  // 检查过期
-  if (parsed.exp && Date.now() / 1000 > parsed.exp) {
-    return c.html(PAGE_404, 404)
-  }
+  if (parsed.exp && Date.now() / 1000 > parsed.exp) return { response: c.html(PAGE_404, 404) }
 
-  // 检查密码
-  if (parsed.pwd) {
-    const inputPwd = c.req.query('p')
-    if (inputPwd !== parsed.pwd) {
-      return c.html(generatePasswordPage(slug, !!inputPwd), inputPwd ? 403 : 200)
-    }
-  }
+  return { slug, parsed }
+}
 
-  // URL 验证辅助函数
-  function validateAndRedirect(url) {
-    if (!isValidUrl(url)) return c.html(PAGE_404, 404)
-    return c.redirect(url, 302)
-  }
-
+/** 根据 parsed 结果执行跳转 */
+function handleRedirect(c, parsed) {
   // 纯 URL → 302 跳转
   if (parsed.url) {
-    return validateAndRedirect(parsed.url)
+    if (!isValidUrl(parsed.url)) return c.html(PAGE_404, 404)
+    return c.redirect(parsed.url, 302)
   }
 
   // 内外网模式 → 验证 URL 合法性
@@ -271,12 +255,46 @@ app.get('*', async (c) => {
   // 检查是否配置了 INTRANET_URL
   const intranetUrl = c.env.INTRANET_URL
   if (!intranetUrl) {
-    // 没有配置内网探测地址，直接跳外网
     return c.redirect(parsed.external, 302)
   }
 
-  // 返回探测页面
   return c.html(generateDetectPage(parsed.internal, parsed.external, intranetUrl))
+}
+
+// ─── 路由 ───
+
+/** GET：展示页面 / 无密码直接跳转 */
+app.get('*', async (c) => {
+  const result = await resolveSlug(c)
+  if (result.response) return result.response
+  const { slug, parsed } = result
+
+  // 有密码 → 显示密码输入页
+  if (parsed.pwd) {
+    return c.html(generatePasswordPage(slug, false))
+  }
+
+  return handleRedirect(c, parsed)
+})
+
+/** POST：密码验证 */
+app.post('*', async (c) => {
+  const result = await resolveSlug(c)
+  if (result.response) return result.response
+  const { slug, parsed } = result
+
+  if (!parsed.pwd) {
+    return handleRedirect(c, parsed)
+  }
+
+  // 从 POST body 读取密码
+  const body = await c.req.parseBody()
+  const inputPwd = body['p']
+  if (inputPwd !== parsed.pwd) {
+    return c.html(generatePasswordPage(slug, true), 403)
+  }
+
+  return handleRedirect(c, parsed)
 })
 
 export default app

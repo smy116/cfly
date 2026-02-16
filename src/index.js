@@ -116,8 +116,13 @@ ${BASE_STYLE}
     location.replace(url);
   }
 
+  var start = Date.now();
   var img = new Image();
   img.onload = function() { go(internalUrl); };
+  img.onerror = function() {
+    // 200ms 内触发 = 浏览器策略拦截，忽略；有延迟 = 真实网络响应（证书错误等）→ 内网
+    if (Date.now() - start >= 200) go(internalUrl);
+  };
   img.src = ${JSON.stringify(intranetUrl + '/favicon.ico')} + '?_t=' + Date.now();
 
   // 3 秒超时 → 跳外网

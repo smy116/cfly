@@ -1,0 +1,10 @@
+name = "cfly"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+minify = true
+
+# DOMAIN 和 INTRANET_URL 请在 CF Dashboard → Worker Settings → Variables 中设置
+
+[[kv_namespaces]]
+binding = "LINKS"
+id = "YOUR_KV_NAMESPACE_ID"

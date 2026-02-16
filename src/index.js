@@ -1,0 +1,171 @@
+import { Hono } from 'hono'
+
+const app = new Hono()
+
+// ─── 工具函数 ───
+
+/** 从请求中提取 slug（子域名模式或路径模式） */
+function getSlug(c) {
+    const domain = c.env.DOMAIN
+    const url = new URL(c.req.url)
+    const hostname = url.hostname
+
+    // 子域名模式: abc.domain.com → slug = "abc"
+    if (hostname !== domain && hostname.endsWith('.' + domain)) {
+        return hostname.slice(0, -(domain.length + 1))
+    }
+
+    // 路径模式: domain.com/abc → slug = "abc"
+    const path = url.pathname.slice(1) // 去掉开头的 /
+    return path
+}
+
+/** 解析 KV value，返回 { internal, external } 或 { url } */
+function parseValue(raw) {
+    if (!raw) return null
+
+    // 尝试 JSON 解析
+    if (raw.startsWith('{')) {
+        try {
+            const obj = JSON.parse(raw)
+            if (obj.i && obj.e) {
+                return { internal: obj.i, external: obj.e }
+            }
+        } catch { }
+    }
+
+    // 纯 URL
+    return { url: raw }
+}
+
+// ─── 页面生成 ───
+
+const BASE_STYLE = `
+*{margin:0;padding:0;box-sizing:border-box}
+body{min-height:100vh;display:flex;align-items:center;justify-content:center;
+  background:#f5f5f7;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#1d1d1f}
+.card{text-align:center;padding:2.5rem 3rem;border-radius:1rem;
+  background:#fff;box-shadow:0 2px 12px rgba(0,0,0,.08);animation:fadeIn .4s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+`
+
+/** 404 页面 */
+function generate404Page() {
+    return `<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>404</title>
+<style>
+${BASE_STYLE}
+.code{font-size:6rem;font-weight:200;letter-spacing:.3rem;line-height:1;color:#d1d1d6}
+.msg{margin-top:.8rem;font-size:.9rem;color:#86868b;font-weight:400}
+.line{width:32px;height:2px;margin:1.2rem auto 0;background:#d1d1d6;border-radius:1px}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="code">404</div>
+  <div class="msg">链接不存在</div>
+  <div class="line"></div>
+</div>
+</body>
+</html>`
+}
+
+/** <img> 标签内网探测页面 */
+function generateDetectPage(internalUrl, externalUrl, intranetUrl) {
+    return `<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>跳转中...</title>
+<style>
+${BASE_STYLE}
+.spinner{width:28px;height:28px;border:2.5px solid #e5e5ea;border-top-color:#007aff;
+  border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 1.2rem}
+@keyframes spin{to{transform:rotate(360deg)}}
+.msg{font-size:.9rem;color:#86868b}
+.links{margin-top:1.5rem;display:flex;gap:.6rem;justify-content:center}
+.links a{padding:.4rem 1rem;border-radius:6px;font-size:.8rem;
+  text-decoration:none;color:#007aff;border:1px solid #e5e5ea;
+  transition:background .2s}
+.links a:hover{background:#f0f0f5}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="spinner"></div>
+  <div class="msg">正在检测网络环境</div>
+  <div class="links">
+    <a href="${internalUrl}">内网访问</a>
+    <a href="${externalUrl}">外网访问</a>
+  </div>
+</div>
+<script>
+(function(){
+  var done = false;
+  var TIMEOUT = 2000;
+  var internalUrl = ${JSON.stringify(internalUrl)};
+  var externalUrl = ${JSON.stringify(externalUrl)};
+
+  function go(url) {
+    if (done) return;
+    done = true;
+    location.replace(url);
+  }
+
+  // <img> 探测：尝试加载内网资源
+  var img = new Image();
+  img.onload = function() { go(internalUrl); };
+  img.onerror = function() {
+    // onerror 快速触发说明 TCP 可达（证书错误/非图片等），判定为内网
+    go(internalUrl);
+  };
+  img.src = ${JSON.stringify(intranetUrl + '/favicon.ico')} + '?_t=' + Date.now();
+
+  // 超时兜底：无法连接内网 → 外网
+  setTimeout(function() { go(externalUrl); }, TIMEOUT);
+})();
+</script>
+</body>
+</html>`
+}
+
+// ─── 路由 ───
+
+app.get('*', async (c) => {
+    const slug = getSlug(c)
+
+    // 忽略空路径和 favicon
+    if (!slug || slug === 'favicon.ico') {
+        return c.html(generate404Page(), 404)
+    }
+
+    // 查询 KV
+    const raw = await c.env.LINKS.get(slug)
+    if (!raw) {
+        return c.html(generate404Page(), 404)
+    }
+
+    const parsed = parseValue(raw)
+
+    // 纯 URL → 302 跳转
+    if (parsed.url) {
+        return c.redirect(parsed.url, 302)
+    }
+
+    // JSON（内外网） → 检查是否配置了 INTRANET_URL
+    const intranetUrl = c.env.INTRANET_URL
+    if (!intranetUrl) {
+        // 没有配置内网探测地址，直接跳外网
+        return c.redirect(parsed.external, 302)
+    }
+
+    // 返回探测页面
+    return c.html(generateDetectPage(parsed.internal, parsed.external, intranetUrl))
+})
+
+export default app

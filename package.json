@@ -1,0 +1,15 @@
+{
+  "name": "cfly",
+  "version": "1.0.0",
+  "description": "极简短链接系统 - Cloudflare Workers + Hono + KV",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "hono": "^4.7.0"
+  },
+  "devDependencies": {
+    "wrangler": "^3.100.0"
+  }
+}

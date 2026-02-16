@@ -6,5 +6,5 @@ minify = true
 # DOMAIN 和 INTRANET_URL 请在 CF Dashboard → Worker Settings → Variables 中设置
 
 [[kv_namespaces]]
-binding = "CFLY_LINK"
+binding = "LINKS"
 id = "0805b8f7a75d4ed8872eb5f97248bed5"

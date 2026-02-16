@@ -87,33 +87,26 @@ ${BASE_STYLE}
 .spinner{width:28px;height:28px;border:2.5px solid #e5e5ea;border-top-color:#007aff;
   border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 1.2rem}
 @keyframes spin{to{transform:rotate(360deg)}}
-.msg{font-size:.9rem;color:#86868b;transition:all .3s}
+.msg{font-size:.9rem;color:#86868b}
 .links{margin-top:1.5rem;display:flex;gap:.6rem;justify-content:center}
 .links a{padding:.4rem 1rem;border-radius:6px;font-size:.8rem;
   text-decoration:none;color:#007aff;border:1px solid #e5e5ea;
-  transition:all .2s}
+  transition:background .2s}
 .links a:hover{background:#f0f0f5}
-.links.highlight a{padding:.55rem 1.3rem;font-size:.9rem;font-weight:500}
-.links.highlight a.int{background:#007aff;color:#fff;border-color:#007aff}
-.links.highlight a.int:hover{background:#0060cc}
-.hint{margin-top:.8rem;font-size:.75rem;color:#aeaeb2;display:none}
 </style>
 </head>
 <body>
 <div class="card">
-  <div class="spinner" id="sp"></div>
-  <div class="msg" id="msg">正在检测网络环境</div>
-  <div class="links" id="links">
-    <a class="int" href="${internalUrl}">内网访问</a>
-    <a class="ext" href="${externalUrl}">外网访问</a>
+  <div class="spinner"></div>
+  <div class="msg">正在检测网络环境</div>
+  <div class="links">
+    <a href="${internalUrl}">内网访问</a>
+    <a href="${externalUrl}">外网访问</a>
   </div>
-  <div class="hint" id="hint">如浏览器弹出权限提示，请点击"允许"后等待自动跳转</div>
 </div>
 <script>
 (function(){
   var done = false;
-  var TIMEOUT = 3000;
-  var MIN_RESPONSE = 200; // onerror 在此时间内触发视为浏览器拦截，非真实网络响应
   var internalUrl = ${JSON.stringify(internalUrl)};
   var externalUrl = ${JSON.stringify(externalUrl)};
 
@@ -123,29 +116,12 @@ ${BASE_STYLE}
     location.replace(url);
   }
 
-  function showManual() {
-    if (done) return;
-    document.getElementById('sp').style.display = 'none';
-    document.getElementById('msg').textContent = '请选择网络环境';
-    document.getElementById('links').classList.add('highlight');
-    document.getElementById('hint').style.display = 'block';
-  }
-
-  var start = Date.now();
   var img = new Image();
   img.onload = function() { go(internalUrl); };
-  img.onerror = function() {
-    var elapsed = Date.now() - start;
-    if (elapsed >= MIN_RESPONSE) {
-      // onerror 有明显延迟 → TCP 可达但返回非图片/证书错误 → 内网
-      go(internalUrl);
-    }
-    // 瞬间触发 → 浏览器策略拦截，不跳转，等超时后显示手动选择
-  };
   img.src = ${JSON.stringify(intranetUrl + '/favicon.ico')} + '?_t=' + Date.now();
 
-  // 超时后显示手动选择（探测仍继续，允许弹窗后自动跳转）
-  setTimeout(showManual, TIMEOUT);
+  // 3 秒超时 → 跳外网
+  setTimeout(function() { go(externalUrl); }, 3000);
 })();
 </script>
 </body>

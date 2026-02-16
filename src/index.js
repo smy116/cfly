@@ -20,7 +20,27 @@ function getSlug(c) {
   return path
 }
 
-/** 解析 KV value，返回 { internal, external } 或 { url } */
+/** 校验 slug 格式：仅允许字母/数字/下划线/连字符，最长 64 字符 */
+function isValidSlug(slug) {
+  return slug.length <= 64 && /^[a-zA-Z0-9_-]+$/.test(slug)
+}
+
+/** 校验字符串是否为合法 URL */
+function isValidUrl(str) {
+  try { new URL(str); return true } catch { return false }
+}
+
+/**
+ * 解析 KV value，返回统一结构：
+ *   { url?, internal?, external?, pwd?, exp? }
+ *
+ * 支持格式：
+ *   纯 URL       → "https://..."
+ *   内外网 JSON  → {"i":"...","e":"..."}
+ *   带过期       → {"url":"...","exp":1700000000}
+ *   带密码       → {"url":"...","pwd":"abc123"}
+ *   综合         → {"i":"...","e":"...","pwd":"x","exp":...}
+ */
 function parseValue(raw) {
   if (!raw) return null
 
@@ -28,8 +48,29 @@ function parseValue(raw) {
   if (raw.startsWith('{')) {
     try {
       const obj = JSON.parse(raw)
+      const result = {}
+
+      // 内外网模式
       if (obj.i && obj.e) {
-        return { internal: obj.i, external: obj.e }
+        result.internal = obj.i
+        result.external = obj.e
+      }
+      // 纯 URL 字段
+      if (obj.url) {
+        result.url = obj.url
+      }
+      // 可选：密码
+      if (obj.pwd) {
+        result.pwd = obj.pwd
+      }
+      // 可选：过期时间（秒级时间戳）
+      if (obj.exp) {
+        result.exp = obj.exp
+      }
+
+      // 至少要有一个跳转目标
+      if (result.url || result.internal) {
+        return result
       }
     } catch { }
   }
@@ -49,9 +90,8 @@ body{min-height:100vh;display:flex;align-items:center;justify-content:center;
 @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 `
 
-/** 404 页面 */
-function generate404Page() {
-  return `<!DOCTYPE html>
+/** 404 页面（预生成，避免每次请求重复构建） */
+const PAGE_404 = `<!DOCTYPE html>
 <html lang="zh">
 <head>
 <meta charset="utf-8">
@@ -69,6 +109,41 @@ ${BASE_STYLE}
   <div class="code">404</div>
   <div class="msg">链接不存在</div>
   <div class="line"></div>
+</div>
+</body>
+</html>`
+
+/** 密码输入页面 */
+function generatePasswordPage(slug, error) {
+  return `<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>需要密码</title>
+<style>
+${BASE_STYLE}
+.icon{font-size:2.5rem;margin-bottom:.8rem}
+.msg{font-size:.9rem;color:#86868b;margin-bottom:1.2rem}
+.err{font-size:.8rem;color:#ff3b30;margin-bottom:.8rem}
+form{display:flex;gap:.5rem;justify-content:center}
+input{padding:.5rem .8rem;border:1px solid #e5e5ea;border-radius:8px;font-size:.85rem;
+  outline:none;transition:border-color .2s;width:140px;text-align:center}
+input:focus{border-color:#007aff}
+button{padding:.5rem 1rem;border:none;border-radius:8px;font-size:.85rem;
+  background:#007aff;color:#fff;cursor:pointer;transition:background .2s}
+button:hover{background:#0056d6}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="icon">🔒</div>
+  <div class="msg">此链接需要密码访问</div>
+  ${error ? '<div class="err">密码错误，请重试</div>' : ''}
+  <form method="GET">
+    <input type="password" name="p" placeholder="输入密码" autofocus required>
+    <button type="submit">确认</button>
+  </form>
 </div>
 </body>
 </html>`
@@ -138,25 +213,62 @@ ${BASE_STYLE}
 app.get('*', async (c) => {
   const slug = getSlug(c)
 
-  // 忽略空路径和 favicon
-  if (!slug || slug === 'favicon.ico') {
-    return c.html(generate404Page(), 404)
+  // favicon.ico → 204 No Content
+  if (slug === 'favicon.ico') {
+    return new Response(null, { status: 204 })
   }
 
-  // 查询 KV
-  const raw = await c.env.LINKS.get(slug)
+  // 空路径 → 404
+  if (!slug) {
+    return c.html(PAGE_404, 404)
+  }
+
+  // slug 格式校验
+  if (!isValidSlug(slug)) {
+    return c.html(PAGE_404, 404)
+  }
+
+  // 查询 KV（带缓存，减少读取次数）
+  const raw = await c.env.LINKS.get(slug, { cacheTtl: 3600 })
   if (!raw) {
-    return c.html(generate404Page(), 404)
+    return c.html(PAGE_404, 404)
   }
 
   const parsed = parseValue(raw)
+  if (!parsed) {
+    return c.html(PAGE_404, 404)
+  }
+
+  // 检查过期
+  if (parsed.exp && Date.now() / 1000 > parsed.exp) {
+    return c.html(PAGE_404, 404)
+  }
+
+  // 检查密码
+  if (parsed.pwd) {
+    const inputPwd = c.req.query('p')
+    if (inputPwd !== parsed.pwd) {
+      return c.html(generatePasswordPage(slug, !!inputPwd), inputPwd ? 403 : 200)
+    }
+  }
+
+  // URL 验证辅助函数
+  function validateAndRedirect(url) {
+    if (!isValidUrl(url)) return c.html(PAGE_404, 404)
+    return c.redirect(url, 302)
+  }
 
   // 纯 URL → 302 跳转
   if (parsed.url) {
-    return c.redirect(parsed.url, 302)
+    return validateAndRedirect(parsed.url)
   }
 
-  // JSON（内外网） → 检查是否配置了 INTRANET_URL
+  // 内外网模式 → 验证 URL 合法性
+  if (!isValidUrl(parsed.internal) || !isValidUrl(parsed.external)) {
+    return c.html(PAGE_404, 404)
+  }
+
+  // 检查是否配置了 INTRANET_URL
   const intranetUrl = c.env.INTRANET_URL
   if (!intranetUrl) {
     // 没有配置内网探测地址，直接跳外网
